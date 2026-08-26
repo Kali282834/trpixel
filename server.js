@@ -12,14 +12,11 @@ const io = new Server(server);
 const CANVAS_WIDTH = 400;
 const CANVAS_HEIGHT = 250;
 const PIXEL_SIZE = 4;
-
-// Cooldown Ayarları (Dinamik Sistem: 5sn - 60sn)
-const BASE_COOLDOWN_MS = 5000; // Başlangıç 5 Saniye
-const MAX_COOLDOWN_MS = 60000;  // Maksimum 60 Saniye Limit
-const STEP_MS = 5000;           // Her pikselde eklenecek/düşülecek adım
+const COOLDOWN_MS = 5000; // 5 Saniye Cooldown
+const MAX_ACCUMULATION_MS = 60000; // Maksimum 60 Saniye Biriktirme (12 Hak)
 
 const pixels = {};
-const userCooldowns = {}; // Sunucu taraflı dinamik cooldown takibi
+const userBank = {}; // Socket bazlı süre biriktirme takibi
 let onlineCount = 0;
 
 // Kalıcı Kayıt Mantığı (pixels.json)
@@ -42,8 +39,20 @@ function savePixelsToDisk() {
         fs.writeFile(DATA_FILE, JSON.stringify(pixels), (err) => {
             if (err) console.error('Pikseller kaydedilirken hata oluştu:', err);
         });
-    }, 1000);
+    }, 500);
 }
+
+// Sunucu kapanırken veya yeniden başlatılırken son veriyi kaydet
+function syncSaveOnExit() {
+    try {
+        fs.writeFileSync(DATA_FILE, JSON.stringify(pixels));
+        console.log('Pikseller başarıyla diske kaydedildi.');
+    } catch (err) {
+        console.error('Kapanış kaydında hata:', err);
+    }
+}
+process.on('SIGINT', () => { syncSaveOnExit(); process.exit(); });
+process.on('SIGTERM', () => { syncSaveOnExit(); process.exit(); });
 
 app.get('/', (req, res) => {
     res.send(`
@@ -58,21 +67,17 @@ app.get('/', (req, res) => {
         body, html { width: 100%; height: 100%; overflow: hidden; background-color: #cccccc; }
         #canvas { display: block; cursor: crosshair; touch-action: none; }
 
-        /* Sol Üst Menü Paneli */
         .top-left-menu { position: absolute; top: 15px; left: 15px; z-index: 10; display: flex; flex-direction: column; gap: 8px; }
         .icon-btn { width: 40px; height: 40px; background: #fff; border: 1px solid #555; font-size: 20px; cursor: pointer; border-radius: 4px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 5px rgba(0,0,0,0.15); }
         .icon-btn:active { background: #e0e0e0; }
 
-        /* Sol Alt Bilgi Paneli */
         .bottom-left-panel { position: absolute; bottom: 20px; left: 15px; display: flex; flex-direction: column; gap: 5px; z-index: 10; }
         .box { background: #e0e0e0; border: 1px solid #555; padding: 6px 12px; font-size: 13px; min-width: 60px; text-align: center; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.15); font-weight: bold; }
         .cooldown-active { background: #ff4d4d; color: white; }
         .cooldown-ready { background: #2ecc71; color: white; }
 
-        /* Sağ Alt Kontrol Paneli */
         .bottom-right-panel { position: absolute; bottom: 20px; right: 15px; display: flex; gap: 8px; z-index: 10; }
 
-        /* Genişletilmiş Renk Paleti */
         .right-palette {
             position: absolute; right: 15px; bottom: 70px;
             display: grid; grid-template-columns: repeat(4, 30px); gap: 2px;
@@ -88,7 +93,6 @@ app.get('/', (req, res) => {
         .color-btn { width: 30px; height: 30px; border: 1px solid rgba(0,0,0,0.15); cursor: pointer; box-sizing: border-box; border-radius: 3px; }
         .color-btn.selected { border: 3px solid #000; transform: scale(1.1); z-index: 1; }
 
-        /* Sohbet Kutusu Paneli */
         .chat-container {
             position: absolute; bottom: 70px; right: 15px; width: 290px; height: 320px;
             background: rgba(255, 255, 255, 0.95); border: 1px solid #555;
@@ -110,7 +114,6 @@ app.get('/', (req, res) => {
         .chat-input-area input { flex: 1; border: none; padding: 8px 10px; font-size: 12px; outline: none; }
         .chat-input-area button { background: #0066cc; color: white; border: none; padding: 0 12px; cursor: pointer; font-weight: bold; }
 
-        /* Modal Pencereler */
         .modal {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.5); z-index: 100; display: flex;
@@ -133,13 +136,11 @@ app.get('/', (req, res) => {
 </head>
 <body>
 
-    <!-- Sol Üst Menü Paneli -->
     <div class="top-left-menu">
         <button class="icon-btn" id="settings-btn" title="Ayarlar">⚙️</button>
         <button class="icon-btn" id="profile-btn" title="Profil">👤</button>
     </div>
 
-    <!-- Ayarlar Penceresi -->
     <div class="modal hidden" id="settings-modal">
         <div class="modal-content">
             <div class="modal-header">
@@ -149,13 +150,13 @@ app.get('/', (req, res) => {
             <div class="modal-body">
                 <label style="cursor:pointer;"><input type="checkbox" id="grid-toggle" checked /> Izgara Çizgilerini Göster</label>
                 <div><strong>Tuval Boyutu:</strong> 400 x 250 (100.000 Piksel)</div>
-                <div><strong>Bekleme Süresi:</strong> Dinamik (5s - 60s)</div>
+                <div><strong>Bekleme Süresi:</strong> 5 Saniye</div>
+                <div><strong>Maks. Biriktirme:</strong> 60 Saniye (12 Hak)</div>
                 <div><strong>Sunucu Durumu:</strong> Aktif</div>
             </div>
         </div>
     </div>
 
-    <!-- Profil Penceresi -->
     <div class="modal hidden" id="profile-modal">
         <div class="modal-content">
             <div class="modal-header">
@@ -192,7 +193,6 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- Sohbet Penceresi -->
     <div class="chat-container hidden" id="chat-box">
         <div class="chat-header">
             <span>Canlı Sohbet</span>
@@ -205,23 +205,19 @@ app.get('/', (req, res) => {
         </form>
     </div>
 
-    <!-- Sol Alt Bilgi Paneli -->
     <div class="bottom-left-panel">
-        <div class="box cooldown-ready" id="cooldown-box">⏱️ Hazır!</div>
+        <div class="box cooldown-ready" id="cooldown-box">⏱️ 60s (12 Hak)</div>
         <div class="box" id="user-count">1 👤</div>
         <div class="box coords" id="coords">(0, 0)</div>
     </div>
 
-    <!-- Sağ Renk Paleti -->
     <div class="right-palette hidden" id="palette"></div>
 
-    <!-- Sağ Alt Butonlar -->
     <div class="bottom-right-panel">
         <button class="icon-btn" id="chat-toggle-btn" title="Sohbet">💬</button>
         <button class="icon-btn" id="palette-toggle-btn" title="Renk Paleti">🎨</button>
     </div>
 
-    <!-- Tuval -->
     <canvas id="canvas"></canvas>
 
     <script src="/socket.io/socket.io.js"></script>
@@ -260,10 +256,15 @@ app.get('/', (req, res) => {
         const CANVAS_WIDTH = 400;
         const CANVAS_HEIGHT = 250;
         const PIXEL_SIZE = 4;
+        const COOLDOWN_MS = 5000;
+        const MAX_ACCUMULATION_MS = 60000;
 
         let selectedColor = '#000000';
         let myPlacedCount = 0;
-        let cooldownEndTime = 0;
+
+        // Biriktirme Süresi Takibi
+        let clientStoredTime = MAX_ACCUMULATION_MS;
+        let clientLastUpdate = Date.now();
 
         const loadedPixels = {};
         let scale = 1;
@@ -294,7 +295,6 @@ app.get('/', (req, res) => {
         }
         window.addEventListener('resize', resizeCanvas);
 
-        // Paleti Oluştur
         colors.forEach(function(color) {
             const btn = document.createElement('div');
             btn.className = 'color-btn' + (color === '#000000' ? ' selected' : '');
@@ -307,7 +307,6 @@ app.get('/', (req, res) => {
             paletteEl.appendChild(btn);
         });
 
-        // Buton Dinleyicileri
         paletteToggleBtn.onclick = function() { paletteEl.classList.toggle('hidden'); };
         chatToggleBtn.onclick = function() { chatBox.classList.toggle('hidden'); };
         chatCloseBtn.onclick = function() { chatBox.classList.add('hidden'); };
@@ -319,7 +318,6 @@ app.get('/', (req, res) => {
         profileBtn.onclick = function() { profileModal.classList.remove('hidden'); };
         profileClose.onclick = function() { profileModal.classList.add('hidden'); };
 
-        // Profil Kaydetme
         profileForm.onsubmit = function(e) {
             e.preventDefault();
             const profileData = {
@@ -332,21 +330,27 @@ app.get('/', (req, res) => {
             profileModal.classList.add('hidden');
         };
 
-        // Cooldown Timer Döngüsü
+        // 60 Saniyelik Havuz ve Cooldown Sayacı
         setInterval(function() {
             const now = Date.now();
-            const diff = cooldownEndTime - now;
-            if (diff > 0) {
-                const seconds = (diff / 1000).toFixed(1);
-                cooldownBox.innerText = '⏱️ ' + seconds + 's';
-                cooldownBox.className = 'box cooldown-active';
-            } else {
-                cooldownBox.innerText = '⏱️ Hazır!';
+            const elapsed = now - clientLastUpdate;
+            clientLastUpdate = now;
+            
+            clientStoredTime = Math.min(MAX_ACCUMULATION_MS, clientStoredTime + elapsed);
+
+            const availablePixels = Math.floor(clientStoredTime / COOLDOWN_MS);
+            
+            if (clientStoredTime >= COOLDOWN_MS) {
+                const totalSec = Math.floor(clientStoredTime / 1000);
+                cooldownBox.innerText = '⏱️ ' + totalSec + 's (' + availablePixels + ' Hak)';
                 cooldownBox.className = 'box cooldown-ready';
+            } else {
+                const neededSec = ((COOLDOWN_MS - clientStoredTime) / 1000).toFixed(1);
+                cooldownBox.innerText = '⏱️ ' + neededSec + 's';
+                cooldownBox.className = 'box cooldown-active';
             }
         }, 100);
 
-        // Sohbet Gönderimi
         chatForm.onsubmit = function(e) {
             e.preventDefault();
             const text = chatInput.value.trim();
@@ -382,7 +386,6 @@ app.get('/', (req, res) => {
             }
         }
 
-        // Çizim Fonksiyonu (Izgara Çizimi Dahil)
         function redraw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.save();
@@ -390,11 +393,9 @@ app.get('/', (req, res) => {
             ctx.translate(offsetX, offsetY);
             ctx.scale(scale, scale);
 
-            // Arka plan
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, CANVAS_WIDTH * PIXEL_SIZE, CANVAS_HEIGHT * PIXEL_SIZE);
 
-            // Pikseller
             Object.keys(loadedPixels).forEach(function(key) {
                 const parts = key.split(',');
                 const x = Number(parts[0]);
@@ -403,7 +404,6 @@ app.get('/', (req, res) => {
                 ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
             });
 
-            // Izgara (Grid) Çizimi
             if (gridToggle.checked && scale >= 1.5) {
                 ctx.strokeStyle = 'rgba(0, 0, 0, 0.15)';
                 ctx.lineWidth = 0.5 / scale;
@@ -434,7 +434,7 @@ app.get('/', (req, res) => {
         }
 
         function tryPlacePixel(clientX, clientY) {
-            if (Date.now() < cooldownEndTime) return; // Cooldown engeli
+            if (clientStoredTime < COOLDOWN_MS) return;
 
             const coords = getPixelCoords(clientX, clientY);
             if (coords.x >= 0 && coords.x < CANVAS_WIDTH && coords.y >= 0 && coords.y < CANVAS_HEIGHT) {
@@ -442,7 +442,6 @@ app.get('/', (req, res) => {
             }
         }
 
-        // Zoom (Fare Tekerleği)
         canvas.addEventListener('wheel', function(e) {
             e.preventDefault();
             const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
@@ -458,7 +457,6 @@ app.get('/', (req, res) => {
             redraw();
         }, { passive: false });
 
-        // Pan & Mouse Eventleri
         canvas.addEventListener('mousedown', function(e) {
             isDragging = true;
             hasDragged = false;
@@ -492,7 +490,6 @@ app.get('/', (req, res) => {
 
         canvas.addEventListener('mouseleave', function() { isDragging = false; });
 
-        // Mobil Dokunmatik Mantığı
         let lastTouchDist = 0;
 
         canvas.addEventListener('touchstart', function(e) {
@@ -549,7 +546,6 @@ app.get('/', (req, res) => {
             if (e.touches.length === 0) isDragging = false;
         });
 
-        // Socket Dinleyicileri
         socket.on('initCanvas', function(pixels) {
             Object.assign(loadedPixels, pixels);
             redraw();
@@ -560,10 +556,13 @@ app.get('/', (req, res) => {
             if (data.placedBy === socket.id) {
                 myPlacedCount++;
                 placedCountEl.innerText = myPlacedCount;
-                // Dinamik cooldown süresi kadar geriye sayım başlat
-                cooldownEndTime = Date.now() + (data.cooldownMs || BASE_COOLDOWN_MS);
             }
             redraw();
+        });
+
+        socket.on('bankUpdate', function(data) {
+            clientStoredTime = data.storedTime;
+            clientLastUpdate = data.lastUpdate || Date.now();
         });
 
         socket.on('userCount', function(count) {
@@ -587,6 +586,12 @@ io.on('connection', (socket) => {
     onlineCount++;
     io.emit('userCount', onlineCount);
 
+    const now = Date.now();
+    userBank[socket.id] = {
+        storedTime: MAX_ACCUMULATION_MS, // Kullanıcı ilk girdiğinde 60s tam dolu başlar
+        lastUpdate: now
+    };
+
     socket.profile = {
         username: 'Oyuncu#' + socket.id.substring(0, 4),
         email: '',
@@ -595,8 +600,8 @@ io.on('connection', (socket) => {
     };
 
     socket.emit('initCanvas', pixels);
+    socket.emit('bankUpdate', { storedTime: userBank[socket.id].storedTime, lastUpdate: userBank[socket.id].lastUpdate });
 
-    // Profil Güncelleme
     socket.on('updateProfile', (data) => {
         if (data && data.username) {
             socket.profile.username = String(data.username).trim().substring(0, 15);
@@ -606,47 +611,37 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Piksel Koyma (Dinamik Cooldown ve Sınır Kontrolü)
+    // Piksel Koyma ve 60s Biriktirme Mantığı
     socket.on('placePixel', ({ x, y, color }) => {
-        const now = Date.now();
-        const userState = userCooldowns[socket.id] || { level: 0, readyAt: 0 };
+        const currentTime = Date.now();
+        let bank = userBank[socket.id];
+        
+        if (!bank) {
+            bank = { storedTime: MAX_ACCUMULATION_MS, lastUpdate: currentTime };
+            userBank[socket.id] = bank;
+        }
 
-        // Henüz süresi dolmadıysa reddet
-        if (now < userState.readyAt) return;
+        // Geçen süreyi havuza ekle (maksimum 60s = 60000ms)
+        const elapsed = currentTime - bank.lastUpdate;
+        bank.storedTime = Math.min(MAX_ACCUMULATION_MS, bank.storedTime + elapsed);
+        bank.lastUpdate = currentTime;
 
-        if (x >= 0 && x < CANVAS_WIDTH && y >= 0 && y < CANVAS_HEIGHT) {
-            // Boşta geçen süreyi hesapla (Hazır olduktan sonra kaç saniye beklemiş?)
-            const extraWait = userState.readyAt > 0 ? Math.max(0, now - userState.readyAt) : 0;
-            const decaySteps = Math.floor(extraWait / STEP_MS);
-
-            // Durduğu her 5s için 1 seviye düşür
-            let newLevel = Math.max(0, userState.level - decaySteps);
-
-            // Piksel koyduğu için seviyeyi 1 arttır (En fazla 12 seviye = 60 saniye)
-            newLevel = Math.min(newLevel + 1, 12);
-
-            const cooldownDuration = newLevel * STEP_MS; // Seviye x 5000ms
-
-            userCooldowns[socket.id] = {
-                level: newLevel,
-                readyAt: now + cooldownDuration
-            };
-
-            const key = x + ',' + y;
-            pixels[key] = color;
-            savePixelsToDisk();
-
-            io.emit('pixelUpdate', { 
-                x, 
-                y, 
-                color, 
-                placedBy: socket.id, 
-                cooldownMs: cooldownDuration 
-            });
+        // En az 5 saniye (5000ms) biriktiyse piksel koymaya izin ver
+        if (bank.storedTime >= COOLDOWN_MS) {
+            if (x >= 0 && x < CANVAS_WIDTH && y >= 0 && y < CANVAS_HEIGHT) {
+                bank.storedTime -= COOLDOWN_MS; // Havuzdan 5 saniye düş
+                const key = x + ',' + y;
+                pixels[key] = color;
+                savePixelsToDisk();
+                
+                io.emit('pixelUpdate', { x, y, color, placedBy: socket.id });
+                socket.emit('bankUpdate', { storedTime: bank.storedTime, lastUpdate: bank.lastUpdate });
+            }
+        } else {
+            socket.emit('bankUpdate', { storedTime: bank.storedTime, lastUpdate: bank.lastUpdate });
         }
     });
 
-    // Chat Mesajı
     socket.on('sendChatMessage', (text) => {
         if (typeof text === 'string' && text.trim().length > 0) {
             const cleanText = text.trim().substring(0, 100);
@@ -659,7 +654,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        delete userCooldowns[socket.id];
+        delete userBank[socket.id];
         onlineCount = Math.max(0, onlineCount - 1);
         io.emit('userCount', onlineCount);
     });
