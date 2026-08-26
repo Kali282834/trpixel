@@ -75,7 +75,7 @@ function syncSaveOnExit() {
 process.on('SIGINT', () => { syncSaveOnExit(); process.exit(); });
 process.on('SIGTERM', () => { syncSaveOnExit(); process.exit(); });
 
-// Kullanıcının Anlık Süre / Hak Hesabı (Kusursuz Zaman Hesabı)
+// Kullanıcının Anlık Süre / Hak Hesabı
 function getUpdatedUserBank(userId) {
     const now = Date.now();
     if (!userBanks[userId]) {
@@ -109,7 +109,8 @@ app.get('/', (req, res) => {
         .icon-btn:active { background: #e0e0e0; }
         .icon-btn.active { background: #2ecc71; color: white; border-color: #27ae60; box-shadow: 0 0 8px rgba(46,204,113,0.6); }
 
-        .bottom-left-panel { position: absolute; bottom: 20px; left: 15px; display: flex; flex-direction: column; gap: 5px; z-index: 10; }
+        .bottom-left-panel { position: absolute; bottom: 20px; left: 15px; display: flex; flex-direction: column; gap: 6px; z-index: 10; }
+        .coords-row { display: flex; gap: 6px; align-items: center; }
         .box { background: #e0e0e0; border: 1px solid #555; padding: 6px 12px; font-size: 13px; min-width: 60px; text-align: center; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.15); font-weight: bold; }
         .cooldown-active { background: #ff4d4d; color: white; }
         .cooldown-ready { background: #2ecc71; color: white; }
@@ -157,7 +158,7 @@ app.get('/', (req, res) => {
         .form-group label { font-weight: bold; font-size: 11px; color: #555; }
         .form-group input, .form-group select { padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; outline: none; }
         .btn-submit { background: #0066cc; color: #fff; border: none; padding: 8px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 5px; }
-        .stats-section { border-top: 1px solid #eee; pt: 10px; margin-top: 10px; }
+        .stats-section { border-top: 1px solid #eee; pt: 10px; margin-top: 5px; }
         .stats-title { font-weight: bold; font-size: 13px; margin-bottom: 6px; color: #111; }
         .leaderboard-list { list-style: none; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
         .leaderboard-item { display: flex; justify-content: space-between; padding: 4px 6px; background: #f8f9fa; border-radius: 4px; }
@@ -167,8 +168,8 @@ app.get('/', (req, res) => {
 
     <div class="top-left-menu">
         <button class="icon-btn" id="settings-btn" title="Ayarlar">⚙️</button>
-        <button class="icon-btn" id="profile-btn" title="Profil & İstatistikler">👤</button>
-        <button class="icon-btn" id="pencil-btn" title="Kalem / Sürükleyerek Çizim Modu">✏️</button>
+        <button class="icon-btn" id="profile-btn" title="Oyuncu Profili">👤</button>
+        <button class="icon-btn" id="stats-btn" title="İstatistikler & Liderlik">📊</button>
     </div>
 
     <div class="modal hidden" id="settings-modal">
@@ -190,7 +191,7 @@ app.get('/', (req, res) => {
     <div class="modal hidden" id="profile-modal">
         <div class="modal-content">
             <div class="modal-header">
-                <span>Oyuncu Profili & İstatistikler</span>
+                <span>Oyuncu Profili</span>
                 <span class="modal-close" id="profile-close">✕</span>
             </div>
             <form id="profile-form" class="modal-body">
@@ -214,9 +215,19 @@ app.get('/', (req, res) => {
                     </select>
                 </div>
                 <button type="submit" class="btn-submit">Profili Kaydet</button>
+            </form>
+        </div>
+    </div>
 
-                <div class="stats-section">
-                    <div class="stats-title">📊 Kişisel İstatistikler</div>
+    <div class="modal hidden" id="stats-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>📊 İstatistikler & Liderlik</span>
+                <span class="modal-close" id="stats-close">✕</span>
+            </div>
+            <div class="modal-body">
+                <div class="stats-section" style="border-top:none; margin-top:0;">
+                    <div class="stats-title">👤 Kişisel İstatistikler</div>
                     <div>Bu Kullanıcı Adıyla Koyulan Piksel: <strong id="user-stats-count">0</strong></div>
                 </div>
 
@@ -226,7 +237,7 @@ app.get('/', (req, res) => {
                         <li class="leaderboard-item"><span>Yükleniyor...</span></li>
                     </ul>
                 </div>
-            </form>
+            </div>
         </div>
     </div>
 
@@ -245,7 +256,10 @@ app.get('/', (req, res) => {
     <div class="bottom-left-panel">
         <div class="box cooldown-ready" id="cooldown-box">⏱️ 60s (12 Hak)</div>
         <div class="box" id="user-count">1 👤</div>
-        <div class="box coords" id="coords">(0, 0)</div>
+        <div class="coords-row">
+            <div class="box coords" id="coords">(0, 0)</div>
+            <button class="icon-btn" id="pencil-btn" title="Kalem / Sürükleyerek Çizim Modu" style="width: 32px; height: 32px; font-size: 16px;">✏️</button>
+        </div>
     </div>
 
     <div class="right-palette hidden" id="palette"></div>
@@ -259,7 +273,25 @@ app.get('/', (req, res) => {
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        // Kalıcı Cihaz Kimliği (UserId) - Sayfa yenilense de sürenin silinmemesini sağlar
+        // Web Audio API ile Piksel Koyma Ses Efekti
+        function playPixelSound() {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.08);
+                gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.08);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.08);
+            } catch(e) {}
+        }
+
+        // Kalıcı Cihaz Kimliği (UserId)
         let userId = localStorage.getItem('rplace_user_id');
         if (!userId) {
             userId = 'u_' + Math.random().toString(36).substring(2, 11) + Date.now();
@@ -293,6 +325,10 @@ app.get('/', (req, res) => {
         const profUsername = document.getElementById('prof-username');
         const profEmail = document.getElementById('prof-email');
         const profNat = document.getElementById('prof-nat');
+
+        const statsBtn = document.getElementById('stats-btn');
+        const statsModal = document.getElementById('stats-modal');
+        const statsClose = document.getElementById('stats-close');
         const userStatsCount = document.getElementById('user-stats-count');
         const leaderboardEl = document.getElementById('leaderboard');
 
@@ -308,7 +344,6 @@ app.get('/', (req, res) => {
         let isPencilMode = false;
         let lastPlacedGridCoords = { x: -1, y: -1 };
 
-        // Biriktirme Süresi Takibi
         let clientStoredTime = MAX_ACCUMULATION_MS;
         let clientLastUpdate = Date.now();
 
@@ -366,11 +401,14 @@ app.get('/', (req, res) => {
         settingsClose.onclick = function() { settingsModal.classList.add('hidden'); };
         gridToggle.onchange = function() { redraw(); };
 
-        profileBtn.onclick = function() {
-            profileModal.classList.remove('hidden');
+        profileBtn.onclick = function() { profileModal.classList.remove('hidden'); };
+        profileClose.onclick = function() { profileModal.classList.add('hidden'); };
+
+        statsBtn.onclick = function() {
+            statsModal.classList.remove('hidden');
             socket.emit('getStats');
         };
-        profileClose.onclick = function() { profileModal.classList.add('hidden'); };
+        statsClose.onclick = function() { statsModal.classList.add('hidden'); };
 
         profileForm.onsubmit = function(e) {
             e.preventDefault();
@@ -380,17 +418,16 @@ app.get('/', (req, res) => {
                 nationality: profNat.value
             };
             socket.emit('updateProfile', profileData);
+            localStorage.setItem('rplace_username', profileData.username);
             profileModal.classList.add('hidden');
         };
 
-        // Bağlantı Kurulunca Oturum Başlat
         socket.on('connect', function() {
             const savedUsername = localStorage.getItem('rplace_username') || ('Oyuncu#' + socket.id.substring(0, 4));
             profUsername.value = savedUsername;
             socket.emit('initSession', { userId: userId, username: savedUsername });
         });
 
-        // 60 Saniyelik Havuz ve Cooldown Sayacı
         setInterval(function() {
             const now = Date.now();
             const elapsed = now - clientLastUpdate;
@@ -410,7 +447,6 @@ app.get('/', (req, res) => {
             }
         }, 100);
 
-        // Sohbet Gönderme
         chatForm.onsubmit = function(e) {
             e.preventDefault();
             const text = chatInput.value.trim();
@@ -511,7 +547,6 @@ app.get('/', (req, res) => {
             }
         }
 
-        // Fare ve Dokunmatik Etkileşimleri (Kalem ve Sürükleme Modu Entegrasyonu)
         canvas.addEventListener('wheel', function(e) {
             e.preventDefault();
             const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
@@ -635,7 +670,6 @@ app.get('/', (req, res) => {
             if (e.touches.length === 0) isDragging = false;
         });
 
-        // Socket Olayları
         socket.on('initCanvas', function(pixels) {
             Object.assign(loadedPixels, pixels);
             redraw();
@@ -644,6 +678,7 @@ app.get('/', (req, res) => {
         socket.on('pixelUpdate', function(data) {
             loadedPixels[data.x + ',' + data.y] = data.color;
             redraw();
+            playPixelSound(); // Piksel koyulunca ses efekti çal
         });
 
         socket.on('bankUpdate', function(data) {
@@ -690,7 +725,6 @@ io.on('connection', (socket) => {
     socket.emit('initCanvas', pixels);
     socket.emit('chatHistory', chatHistory);
 
-    // Oturum Başlatma ve Süre/Kullanıcı Eşleştirme
     socket.on('initSession', ({ userId, username }) => {
         if (!userId) return;
         socket.userId = userId;
@@ -710,7 +744,6 @@ io.on('connection', (socket) => {
             socket.profile.username = newName;
             socket.profile.nationality = String(data.nationality || '🇹🇷 Türkiye');
 
-            // Eğer eski isimde istatistik varsa yeni isme aktar
             if (oldName !== newName && userStats[oldName]) {
                 userStats[newName] = userStats[newName] || { placedCount: 0 };
                 userStats[newName].placedCount += userStats[oldName].placedCount;
@@ -720,7 +753,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Piksel Koyma ve Kusursuz Süre Mantığı
     socket.on('placePixel', ({ userId, x, y, color }) => {
         const uId = userId || socket.userId;
         if (!uId) return;
@@ -729,11 +761,10 @@ io.on('connection', (socket) => {
 
         if (bank.storedTime >= COOLDOWN_MS) {
             if (x >= 0 && x < CANVAS_WIDTH && y >= 0 && y < CANVAS_HEIGHT) {
-                bank.storedTime -= COOLDOWN_MS; // 5 saniye harca
+                bank.storedTime -= COOLDOWN_MS;
                 const key = x + ',' + y;
                 pixels[key] = color;
 
-                // İstatistik Güncelleme (İsme Göre)
                 const uname = socket.profile.username;
                 userStats[uname] = userStats[uname] || { placedCount: 0 };
                 userStats[uname].placedCount++;
@@ -748,7 +779,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Sohbet Mesajı (Diske Kayıtlı)
     socket.on('sendChatMessage', (text) => {
         if (typeof text === 'string' && text.trim().length > 0) {
             const cleanText = text.trim().substring(0, 100);
@@ -759,14 +789,13 @@ io.on('connection', (socket) => {
                 time: Date.now()
             };
             chatHistory.push(msgObj);
-            if (chatHistory.length > 100) chatHistory.shift(); // Son 100 mesajı tut
+            if (chatHistory.length > 100) chatHistory.shift();
 
             saveDataToDisk();
             io.emit('newChatMessage', msgObj);
         }
     });
 
-    // İstatistik İsteği
     socket.on('getStats', () => {
         const uname = socket.profile.username;
         const myCount = userStats[uname] ? userStats[uname].placedCount : 0;
