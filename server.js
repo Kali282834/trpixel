@@ -12,9 +12,14 @@ const io = new Server(server);
 const CANVAS_WIDTH = 400;
 const CANVAS_HEIGHT = 250;
 const PIXEL_SIZE = 4;
-const COOLDOWN_MS = 3000; // 3 Saniye Cooldown
+
+// Cooldown Ayarları (Dinamik Sistem: 5sn - 60sn)
+const BASE_COOLDOWN_MS = 5000; // Başlangıç 5 Saniye
+const MAX_COOLDOWN_MS = 60000;  // Maksimum 60 Saniye Limit
+const STEP_MS = 5000;           // Her pikselde eklenecek/düşülecek adım
+
 const pixels = {};
-const userCooldowns = {}; // Sunucu taraflı cooldown takibi
+const userCooldowns = {}; // Sunucu taraflı dinamik cooldown takibi
 let onlineCount = 0;
 
 // Kalıcı Kayıt Mantığı (pixels.json)
@@ -144,7 +149,7 @@ app.get('/', (req, res) => {
             <div class="modal-body">
                 <label style="cursor:pointer;"><input type="checkbox" id="grid-toggle" checked /> Izgara Çizgilerini Göster</label>
                 <div><strong>Tuval Boyutu:</strong> 400 x 250 (100.000 Piksel)</div>
-                <div><strong>Bekleme Süresi:</strong> 3 Saniye</div>
+                <div><strong>Bekleme Süresi:</strong> Dinamik (5s - 60s)</div>
                 <div><strong>Sunucu Durumu:</strong> Aktif</div>
             </div>
         </div>
@@ -255,7 +260,6 @@ app.get('/', (req, res) => {
         const CANVAS_WIDTH = 400;
         const CANVAS_HEIGHT = 250;
         const PIXEL_SIZE = 4;
-        const COOLDOWN_MS = 3000;
 
         let selectedColor = '#000000';
         let myPlacedCount = 0;
@@ -556,7 +560,8 @@ app.get('/', (req, res) => {
             if (data.placedBy === socket.id) {
                 myPlacedCount++;
                 placedCountEl.innerText = myPlacedCount;
-                cooldownEndTime = Date.now() + COOLDOWN_MS;
+                // Dinamik cooldown süresi kadar geriye sayım başlat
+                cooldownEndTime = Date.now() + (data.cooldownMs || BASE_COOLDOWN_MS);
             }
             redraw();
         });
@@ -601,19 +606,43 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Piksel Koyma (Cooldown ve Sınır Kontrolü)
+    // Piksel Koyma (Dinamik Cooldown ve Sınır Kontrolü)
     socket.on('placePixel', ({ x, y, color }) => {
         const now = Date.now();
-        const lastTime = userCooldowns[socket.id] || 0;
+        const userState = userCooldowns[socket.id] || { level: 0, readyAt: 0 };
 
-        if (now - lastTime < COOLDOWN_MS) return; // Sunucu koruması
+        // Henüz süresi dolmadıysa reddet
+        if (now < userState.readyAt) return;
 
         if (x >= 0 && x < CANVAS_WIDTH && y >= 0 && y < CANVAS_HEIGHT) {
-            userCooldowns[socket.id] = now;
+            // Boşta geçen süreyi hesapla (Hazır olduktan sonra kaç saniye beklemiş?)
+            const extraWait = userState.readyAt > 0 ? Math.max(0, now - userState.readyAt) : 0;
+            const decaySteps = Math.floor(extraWait / STEP_MS);
+
+            // Durduğu her 5s için 1 seviye düşür
+            let newLevel = Math.max(0, userState.level - decaySteps);
+
+            // Piksel koyduğu için seviyeyi 1 arttır (En fazla 12 seviye = 60 saniye)
+            newLevel = Math.min(newLevel + 1, 12);
+
+            const cooldownDuration = newLevel * STEP_MS; // Seviye x 5000ms
+
+            userCooldowns[socket.id] = {
+                level: newLevel,
+                readyAt: now + cooldownDuration
+            };
+
             const key = x + ',' + y;
             pixels[key] = color;
             savePixelsToDisk();
-            io.emit('pixelUpdate', { x, y, color, placedBy: socket.id });
+
+            io.emit('pixelUpdate', { 
+                x, 
+                y, 
+                color, 
+                placedBy: socket.id, 
+                cooldownMs: cooldownDuration 
+            });
         }
     });
 
