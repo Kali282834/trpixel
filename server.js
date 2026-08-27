@@ -8,17 +8,17 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// Toplam 100.000 Piksel (400 x 250 Grid)
-const CANVAS_WIDTH = 400;
-const CANVAS_HEIGHT = 250;
+// Pixmap/Dünya Haritası Oranı (800 x 400 Grid - 320.000 Piksel)
+const CANVAS_WIDTH = 800;
+const CANVAS_HEIGHT = 400;
 const PIXEL_SIZE = 4;
-const COOLDOWN_MS = 5000; // 5 Saniye Cooldown (1 Hak)
-const MAX_ACCUMULATION_MS = 60000; // Maksimum 60 Saniye Biriktirme (12 Hak)
+const COOLDOWN_MS = 5000; 
+const MAX_ACCUMULATION_MS = 60000; 
 
 // Veri Yapıları
 const pixels = {};
-const userBanks = {}; // userId bazlı süre takibi (Sayfa yenilense de silinmez)
-const userStats = {}; // isme göre istatistik takibi { username: { placedCount: 0 } }
+const userBanks = {}; 
+const userStats = {}; 
 let chatHistory = [];
 let onlineCount = 0;
 
@@ -75,7 +75,6 @@ function syncSaveOnExit() {
 process.on('SIGINT', () => { syncSaveOnExit(); process.exit(); });
 process.on('SIGTERM', () => { syncSaveOnExit(); process.exit(); });
 
-// Kullanıcının Anlık Süre / Hak Hesabı
 function getUpdatedUserBank(userId) {
     const now = Date.now();
     if (!userBanks[userId]) {
@@ -98,10 +97,10 @@ app.get('/', (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Pixel Tuvali - Kalıcı Enerji & Şablon Desteği</title>
+    <title>Pixel World Map - Pixmap Clone</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: sans-serif; user-select: none; }
-        body, html { width: 100%; height: 100%; overflow: hidden; background-color: #cccccc; }
+        body, html { width: 100%; height: 100%; overflow: hidden; background-color: #0d1b2a; }
         #canvas { display: block; cursor: crosshair; touch-action: none; }
 
         .top-left-menu { position: absolute; top: 15px; left: 15px; z-index: 10; display: flex; flex-direction: column; gap: 8px; }
@@ -180,11 +179,12 @@ app.get('/', (req, res) => {
                 <span class="modal-close" id="settings-close">✕</span>
             </div>
             <div class="modal-body">
+                <label style="cursor:pointer;"><input type="checkbox" id="map-bg-toggle" checked /> Dünya Haritası Tabanını Göster</label>
                 <label style="cursor:pointer;"><input type="checkbox" id="grid-toggle" checked /> Izgara Çizgilerini Göster</label>
                 
                 <hr class="divider">
                 
-                <div class="stats-title">🖼️ Şablon (Overlay) Ayarları</div>
+                <div class="stats-title">🖼️ Özel Şablon (Overlay)</div>
                 <label style="cursor:pointer;"><input type="checkbox" id="overlay-toggle" /> Şablonu Aktif Et</label>
                 
                 <div class="form-group">
@@ -199,10 +199,9 @@ app.get('/', (req, res) => {
 
                 <hr class="divider">
 
-                <div><strong>Tuval Boyutu:</strong> 400 x 250 (100.000 Piksel)</div>
+                <div><strong>Tuval Boyutu:</strong> 800 x 400 (320.000 Piksel Dünya Map)</div>
                 <div><strong>Bekleme Süresi:</strong> 5 Saniye</div>
                 <div><strong>Maks. Biriktirme:</strong> 60 Saniye (12 Hak)</div>
-                <div><strong>Sunucu Durumu:</strong> Aktif</div>
             </div>
         </div>
     </div>
@@ -292,7 +291,6 @@ app.get('/', (req, res) => {
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        // Web Audio API ile Piksel Koyma Ses Efekti
         function playPixelSound() {
             try {
                 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -310,7 +308,6 @@ app.get('/', (req, res) => {
             } catch(e) {}
         }
 
-        // Kalıcı Cihaz Kimliği (UserId)
         let userId = localStorage.getItem('rplace_user_id');
         if (!userId) {
             userId = 'u_' + Math.random().toString(36).substring(2, 11) + Date.now();
@@ -336,6 +333,18 @@ app.get('/', (req, res) => {
         const settingsModal = document.getElementById('settings-modal');
         const settingsClose = document.getElementById('settings-close');
         const gridToggle = document.getElementById('grid-toggle');
+        const mapBgToggle = document.getElementById('map-bg-toggle');
+
+        // Dünya Haritası Arka Planı (Equirectangular Map)
+        const worldMapImg = new Image();
+        let isWorldMapLoaded = false;
+        worldMapImg.crossOrigin = "anonymous";
+        // Standart Pixmap/Dünya Haritası Görseli
+        worldMapImg.src = "https://upload.wikimedia.org/wikipedia/commons/thumb/8/83/Equirectangular_projection_SW.jpg/800px-Equirectangular_projection_SW.jpg";
+        worldMapImg.onload = function() {
+            isWorldMapLoaded = true;
+            redraw();
+        };
 
         // Şablon (Overlay) Elemanları
         const overlayToggle = document.getElementById('overlay-toggle');
@@ -362,8 +371,8 @@ app.get('/', (req, res) => {
 
         const cooldownBox = document.getElementById('cooldown-box');
 
-        const CANVAS_WIDTH = 400;
-        const CANVAS_HEIGHT = 250;
+        const CANVAS_WIDTH = 800;
+        const CANVAS_HEIGHT = 400;
         const PIXEL_SIZE = 4;
         const COOLDOWN_MS = 5000;
         const MAX_ACCUMULATION_MS = 60000;
@@ -376,9 +385,9 @@ app.get('/', (req, res) => {
         let clientLastUpdate = Date.now();
 
         const loadedPixels = {};
-        let scale = 1;
-        let offsetX = (window.innerWidth - CANVAS_WIDTH * PIXEL_SIZE) / 2;
-        let offsetY = (window.innerHeight - CANVAS_HEIGHT * PIXEL_SIZE) / 2;
+        let scale = 0.8;
+        let offsetX = (window.innerWidth - CANVAS_WIDTH * PIXEL_SIZE * scale) / 2;
+        let offsetY = (window.innerHeight - CANVAS_HEIGHT * PIXEL_SIZE * scale) / 2;
 
         let isDragging = false;
         let hasDragged = false;
@@ -428,8 +437,8 @@ app.get('/', (req, res) => {
         settingsBtn.onclick = function() { settingsModal.classList.remove('hidden'); };
         settingsClose.onclick = function() { settingsModal.classList.add('hidden'); };
         gridToggle.onchange = function() { redraw(); };
+        mapBgToggle.onchange = function() { redraw(); };
 
-        // Şablon Etkileşimleri
         overlayToggle.onchange = function() {
             isOverlayActive = overlayToggle.checked;
             redraw();
@@ -556,11 +565,15 @@ app.get('/', (req, res) => {
             ctx.translate(offsetX, offsetY);
             ctx.scale(scale, scale);
 
-            // Arka Plan
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, CANVAS_WIDTH * PIXEL_SIZE, CANVAS_HEIGHT * PIXEL_SIZE);
+            // 1. Arka Plan: Dünya Haritası
+            if (mapBgToggle.checked && isWorldMapLoaded) {
+                ctx.drawImage(worldMapImg, 0, 0, CANVAS_WIDTH * PIXEL_SIZE, CANVAS_HEIGHT * PIXEL_SIZE);
+            } else {
+                ctx.fillStyle = '#102a43'; // Okyanus Mavisi Taban
+                ctx.fillRect(0, 0, CANVAS_WIDTH * PIXEL_SIZE, CANVAS_HEIGHT * PIXEL_SIZE);
+            }
 
-            // Koyulan Pikseller
+            // 2. Oyuncuların Koyduğu Pikseller
             Object.keys(loadedPixels).forEach(function(key) {
                 const parts = key.split(',');
                 const x = Number(parts[0]);
@@ -569,7 +582,7 @@ app.get('/', (req, res) => {
                 ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
             });
 
-            // Şablon (Overlay) Çizimi - Piksellerin Üstüne Şeffaf Çizilir
+            // 3. Özel Şablon (Overlay)
             if (isOverlayActive && overlayImage) {
                 ctx.save();
                 ctx.globalAlpha = overlayAlpha;
@@ -577,17 +590,17 @@ app.get('/', (req, res) => {
                 ctx.restore();
             }
 
-            // Izgara Çizgileri
+            // 4. Izgara Çizgileri
             if (gridToggle.checked && scale >= 1.5) {
-                ctx.strokeStyle = 'rgba(0, 0, 0, 0.15)';
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
                 ctx.lineWidth = 0.5 / scale;
                 ctx.beginPath();
 
-                for (let x = 0; x <= CANVAS_WIDTH; x++) {
+                for (let x = 0; x <= CANVAS_WIDTH; x += 5) {
                     ctx.moveTo(x * PIXEL_SIZE, 0);
                     ctx.lineTo(x * PIXEL_SIZE, CANVAS_HEIGHT * PIXEL_SIZE);
                 }
-                for (let y = 0; y <= CANVAS_HEIGHT; y++) {
+                for (let y = 0; y <= CANVAS_HEIGHT; y += 5) {
                     ctx.moveTo(0, y * PIXEL_SIZE);
                     ctx.lineTo(CANVAS_WIDTH * PIXEL_SIZE, y * PIXEL_SIZE);
                 }
@@ -619,7 +632,7 @@ app.get('/', (req, res) => {
         canvas.addEventListener('wheel', function(e) {
             e.preventDefault();
             const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
-            if (scale * zoomFactor < 0.2 || scale * zoomFactor > 30) return;
+            if (scale * zoomFactor < 0.15 || scale * zoomFactor > 35) return;
 
             const mouseX = e.clientX;
             const mouseY = e.clientY;
@@ -719,7 +732,7 @@ app.get('/', (req, res) => {
                     e.touches[0].clientY - e.touches[1].clientY
                 );
                 const zoomFactor = dist / (lastTouchDist || dist);
-                if (scale * zoomFactor >= 0.2 && scale * zoomFactor <= 30) {
+                if (scale * zoomFactor >= 0.15 && scale * zoomFactor <= 35) {
                     const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
                     const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
                     offsetX = midX - (midX - offsetX) * zoomFactor;
